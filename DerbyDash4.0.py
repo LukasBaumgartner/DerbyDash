@@ -1,3 +1,4 @@
+# Make sure to run environment on 3.12 to make it work with packages
 """
 Derby Dash — First-Person Risk/Reward Runner
 ============================================
