@@ -508,6 +508,81 @@ class DerbyDash:
     def _update_bar(self):
         pass  # nothing needs updating every frame in bar state
 
+    def _draw_bar_patrons(self, surf, counter_y, t):
+        """Draw 4 pub patrons sitting on bar stools, animated gently."""
+        # Fixed seats either side of the player gap (two left, two right)
+        seats = [
+            {"x": 95,      "facing":  1, "shirt": (160,  40,  40), "hair": (30, 18, 6),  "glass_col": (240,190, 50,160)},
+            {"x": 215,     "facing":  1, "shirt": ( 40,  90, 160), "hair": (18, 12, 4),  "glass_col": (180,220,255,150)},
+            {"x": W - 215, "facing": -1, "shirt": ( 50, 140,  60), "hair": (60, 40,18),  "glass_col": (240,190, 50,160)},
+            {"x": W - 95,  "facing": -1, "shirt": (130,  60, 130), "hair": (20, 14, 4),  "glass_col": (180,220,255,150)},
+        ]
+        for i, p in enumerate(seats):
+            px2   = p["x"]
+            phase = i * math.pi * 0.5        # stagger sway phases
+            sway  = int(math.sin(t * 0.55 + phase) * 2)
+            nod   = int(math.sin(t * 0.38 + phase) * 2)
+
+            # ── Legs hanging down from stool ──────────────────────────────────
+            leg_y_top = counter_y + 2
+            leg_y_bot = counter_y + 55
+            for lx_off in (-8, 8):
+                pygame.draw.line(surf, (30, 20, 8),
+                                 (px2 + lx_off, leg_y_top),
+                                 (px2 + lx_off + p["facing"] * 3, leg_y_bot), 5)
+            # Shoes
+            for lx_off in (-8, 8):
+                pygame.draw.ellipse(surf, (18, 12, 4),
+                                    (px2 + lx_off + p["facing"] * 3 - 7,
+                                     leg_y_bot - 2, 14, 7))
+
+            # ── Torso ─────────────────────────────────────────────────────────
+            tor_bot_y = counter_y - 2
+            tor_top_y = tor_bot_y - 50 + sway
+            tor_x     = px2 + sway
+            pygame.draw.line(surf, p["shirt"],
+                             (tor_x, tor_bot_y), (tor_x, tor_top_y), 18)
+
+            # ── Arm reaching for drink ─────────────────────────────────────────
+            arm_reach = int(math.sin(t * 0.28 + phase) * 6) + 10
+            arm_x = tor_x + p["facing"] * arm_reach
+            arm_y = tor_top_y + 18
+            pygame.draw.line(surf, p["shirt"],
+                             (tor_x, arm_y),
+                             (arm_x, arm_y + 8), 7)
+            # Hand dot
+            pygame.draw.circle(surf, (210, 168, 118), (arm_x, arm_y + 8), 4)
+
+            # ── Glass being held ──────────────────────────────────────────────
+            gx = arm_x + p["facing"] * 6
+            gy = arm_y + 6
+            gl = pygame.Surface((16, 22), pygame.SRCALPHA)
+            pygame.draw.rect(gl, (195, 215, 235, 70), (1,  0, 14, 20), border_radius=2)
+            pygame.draw.rect(gl, p["glass_col"],       (2,  6, 12, 12), border_radius=2)
+            pygame.draw.rect(gl, (255,255,255, 110),   (3,  8,  4, 10))
+            surf.blit(gl, (gx - 8, gy - 10))
+
+            # ── Other arm resting on bar ──────────────────────────────────────
+            rest_x = tor_x - p["facing"] * 16
+            pygame.draw.line(surf, p["shirt"],
+                             (tor_x, arm_y),
+                             (rest_x, counter_y - 2), 7)
+
+            # ── Head ──────────────────────────────────────────────────────────
+            head_x = tor_x + sway // 2
+            head_y = tor_top_y - 12 + nod
+            pygame.draw.circle(surf, (210, 168, 118), (head_x, head_y), 12)
+            # Hair
+            pygame.draw.ellipse(surf, p["hair"],
+                                (head_x - 12, head_y - 12, 24, 14))
+            # Face turned slightly toward bar
+            eye_side = p["facing"]
+            pygame.draw.circle(surf, (35, 22, 8),
+                               (head_x + eye_side * 4, head_y - 1), 2)
+            # Ear on far side
+            pygame.draw.circle(surf, (195, 148, 105),
+                               (head_x - eye_side * 10, head_y + 1), 4)
+
     def _draw_bar(self):
         surf = self.screen
         t    = pygame.time.get_ticks() / 1000.0
@@ -589,6 +664,9 @@ class DerbyDash:
             pygame.draw.rect(gl, gcol,               (2,  7, 20, 20), border_radius=2)
             pygame.draw.rect(gl, (255,255,255,115),  (3, 9,  5,  16))
             surf.blit(gl, (gx-12, counter_y-26))
+
+        # ── BAR PATRONS ──────────────────────────────────────────────────────
+        self._draw_bar_patrons(surf, counter_y, t)
 
         # ── BARMAN ──────────────────────────────────────────────────────────
         bm_x = W // 2
@@ -759,6 +837,70 @@ class DerbyDash:
                 remaining.append((fire_at, action))
         self.input_queue = remaining
 
+    def _spawn_wave(self, spawn_depth: float):
+        """Spawn a wave of obstacles that is ALWAYS survivable.
+
+        A wave is built by first choosing which lanes are *blocked*, then
+        checking that guards don't cover every escape route.  Guards spawned
+        as part of a wave are staggered slightly ahead so the player sees the
+        obstacle first and the guard second — never both arriving together.
+        """
+        roll = random.random()
+
+        if roll < 0.15:
+            # ── Triple fence: exactly ONE ghost (passable) lane ───────────────
+            ghost_lane = random.randint(0, 2)
+            for lane in range(3):
+                obs = Obstacle(lane, OBS_TYPES[0], spawn_depth=spawn_depth)
+                obs.is_ghost = (lane == ghost_lane)
+                self.obstacles.append(obs)
+            # No guard with triple fence — the fence puzzle is hard enough
+
+        elif roll < 0.55:
+            # ── Single obstacle in one lane ───────────────────────────────────
+            otype = random.choice(OBS_TYPES)
+            lane  = random.randint(0, 2)
+            obs   = Obstacle(lane, otype, spawn_depth=spawn_depth)
+            obs.is_ghost = False
+            self.obstacles.append(obs)
+
+            # Guard may co-spawn but MUST NOT block all remaining open lanes.
+            # Open lanes after the obstacle: all lanes except obs.lane
+            if random.random() < 0.22:
+                open_lanes = [l for l in range(3) if l != lane]
+                # Guard takes one open lane — player always has at least one other
+                if len(open_lanes) >= 2:
+                    guard_lane = random.choice(open_lanes)
+                    g = Guard(random.randint(0, 2))
+                    g.lane = guard_lane
+                    # Stagger guard slightly closer so obstacle arrives first
+                    g.depth = min(spawn_depth, 0.88)
+                    self.guards.append(g)
+
+        elif roll < 0.80:
+            # ── Two obstacles in different lanes ──────────────────────────────
+            blocked = random.sample(range(3), 2)
+            safe    = [l for l in range(3) if l not in blocked][0]
+            for lane in blocked:
+                otype = random.choice(OBS_TYPES)
+                obs   = Obstacle(lane, otype, spawn_depth=spawn_depth)
+                obs.is_ghost = False
+                self.obstacles.append(obs)
+
+            # Guard ONLY allowed if it goes into a blocked lane (it's already
+            # lethal, so it won't add a new threat) — effectively decorative,
+            # or skip the guard entirely.  Never put guard in the safe lane.
+            if random.random() < 0.18:
+                guard_lane = random.choice(blocked)
+                g = Guard(guard_lane)
+                g.depth = min(spawn_depth, 0.85)
+                self.guards.append(g)
+
+        else:
+            # ── Lone guard, no obstacle ───────────────────────────────────────
+            g = Guard(random.randint(0, 2))
+            self.guards.append(g)
+
     def _update_race(self):
         self.race_frame  += 1
         self.survive_time = self.race_frame / FPS
@@ -769,28 +911,12 @@ class DerbyDash:
         self.spawn_interval = max(32, 80 - self.survive_time * 1.0)
 
         # Spawn — sober = obstacles spawn further away (more warning time)
-        # drunk_level=0 -> spawn_depth=1.0 (full horizon distance)
-        # drunk_level=10 -> spawn_depth=0.70 (much closer, less warning)
+        # Each wave is a self-contained "puzzle" with at least one safe lane.
         self.spawn_timer += 1
         if self.spawn_timer >= self.spawn_interval:
             self.spawn_timer = 0
             spawn_depth = max(0.70, 1.0 - self.drunk_level * 0.030)
-            # 15% chance to spawn a triple-fence obstacle set instead of normal
-            if random.random() < 0.15:
-                ghost_lane = random.randint(0, 2)
-                for lane in range(3):
-                    obs = Obstacle(lane, OBS_TYPES[0], spawn_depth=spawn_depth)
-                    obs.is_ghost = (lane == ghost_lane)
-                    self.obstacles.append(obs)
-            else:
-                otype = random.choice(OBS_TYPES)
-                lane  = random.randint(0, 2)
-                obs   = Obstacle(lane, otype, spawn_depth=spawn_depth)
-                obs.is_ghost = False
-                self.obstacles.append(obs)
-            if random.random() < 0.22:
-                g = Guard(random.randint(0, 2))
-                self.guards.append(g)
+            self._spawn_wave(spawn_depth)
 
         # Jump physics
         if self.is_jumping:
@@ -1085,166 +1211,215 @@ class DerbyDash:
         pygame.draw.line(surf, (50, 38, 22), (0, HORIZON_Y), (W, HORIZON_Y), 2)
 
     def _draw_player(self, surf):
-        """Front-facing horse + jockey viewed from behind/below."""
+        """Front-facing horse + jockey.  The horse is viewed nearly head-on,
+        so the body is foreshortened (tall & narrow), legs drop straight down,
+        and the large head fills the top.  Much slimmer than a side view."""
         px     = int(lane_to_x(self.player_lane, 0.0) + self.stumble_dx)
-        ground = H - 10
-        jy     = int(self.player_y)   # negative = in air
+        ground = H - 8
+        jy     = int(self.player_y)       # negative = in air
         t      = self.bg_offset
-        bob    = int(math.sin(t * 0.55) * 4)
-        base_y = ground + jy + bob
+        bob    = int(math.sin(t * 0.52) * 3)
+        base_y = ground + jy + bob        # where hooves touch ground
 
-        # ── SHADOW ────────────────────────────────────────────────────────────
-        shadow_scale = max(0.25, 1.0 - abs(jy) / 110)
-        sw = int(120 * shadow_scale)
-        sh_s = pygame.Surface((sw, 14), pygame.SRCALPHA)
-        pygame.draw.ellipse(sh_s, (0, 0, 0, int(75 * shadow_scale)), (0, 0, sw, 14))
-        surf.blit(sh_s, (px - sw // 2, ground - 4))
+        horse_c  = (72, 44, 18)           # chestnut body
+        horse_hi = (105, 65, 28)          # lighter chest highlight
+        leg_c    = (55, 32, 10)           # leg colour
+        hoof_c   = (22, 14, 4)            # dark hooves
+        gait     = t * 0.60              # gallop cycle
 
-        horse_col = (62, 38, 16)
-        horse_hi  = (92, 58, 26)
-        hoof_col  = (28, 18, 6)
-        leg_col   = (50, 30, 10)
-        gait      = t * 0.55
+        # ── GROUND SHADOW ────────────────────────────────────────────────────
+        sh_sc = max(0.2, 1.0 - abs(jy) / 100)
+        sw    = int(68 * sh_sc)
+        sh_s  = pygame.Surface((sw * 2, 10), pygame.SRCALPHA)
+        pygame.draw.ellipse(sh_s, (0, 0, 0, int(70 * sh_sc)), (0, 0, sw * 2, 10))
+        surf.blit(sh_s, (px - sw, ground - 3))
 
-        # ── REAR LEGS (wide stance, front-on) ────────────────────────────────
-        for side, sign in ((-1, -1), (1, 1)):
-            kick = int(math.sin(gait + (0 if side == -1 else math.pi)) * 14)
-            lx   = px + sign * 28
-            # upper leg segment
-            knee_x = lx + sign * 8
-            knee_y = base_y - 28
-            pygame.draw.line(surf, leg_col, (lx, base_y - 52), (knee_x, knee_y), 10)
-            # lower leg
-            foot_x = lx + sign * 14 + kick
-            pygame.draw.line(surf, leg_col, (knee_x, knee_y), (foot_x, base_y - 4), 8)
-            # hoof
-            pygame.draw.ellipse(surf, hoof_col,
-                                (foot_x - 10, base_y - 8, 20, 10))
+        # ── LEG GEOMETRY ─────────────────────────────────────────────────────
+        # Front-on gallop: legs swing forward/back in pairs.
+        # We draw four legs as thin pillars that splay slightly outward.
+        # Hip attachment points on the barrel
+        body_top = base_y - 155          # top of barrel
+        body_bot = base_y - 68           # bottom of barrel
+        barrel_cx = px
+        barrel_half_w = 22               # half-width of slim barrel at mid
 
-        # ── HORSE BODY (front-on torso — wider than tall, foreshortened) ─────
-        body_w = 90
-        body_h = 52
-        body_y = base_y - 90
-        # Main ellipse body
-        pygame.draw.ellipse(surf, horse_col, (px - body_w // 2, body_y, body_w, body_h))
-        # Chest highlight
+        # Hip sockets (where upper leg meets barrel)
+        hip_pts = [
+            (barrel_cx - 18, body_bot - 5),   # left rear
+            (barrel_cx + 18, body_bot - 5),   # right rear
+            (barrel_cx - 12, body_bot + 2),   # left front
+            (barrel_cx + 12, body_bot + 2),   # right front
+        ]
+        # Phase offsets: rear pair leads front pair by half a cycle
+        phases = [0, math.pi, math.pi * 0.5, math.pi * 1.5]
+
+        for i, (hx, hy) in enumerate(hip_pts):
+            swing = math.sin(gait + phases[i])
+            # Knee: swings forward/back ±12 px, drops to roughly mid-shin
+            kx = hx + swing * 10
+            ky = hy + 38
+            # Cannon bone: nearly vertical, tiny splay outward
+            side_sign = -1 if i % 2 == 0 else 1
+            foot_x = kx + side_sign * 4 + swing * 4
+            foot_y = base_y - 2
+
+            # Upper leg (thick)
+            pygame.draw.line(surf, leg_c, (hx, hy), (int(kx), int(ky)), 7)
+            # Cannon bone (thinner)
+            pygame.draw.line(surf, leg_c, (int(kx), int(ky)), (int(foot_x), foot_y), 5)
+            # Fetlock bump
+            pygame.draw.circle(surf, leg_c, (int(foot_x), foot_y - 2), 3)
+            # Hoof
+            pygame.draw.ellipse(surf, hoof_c,
+                                (int(foot_x) - 6, foot_y - 3, 12, 7))
+
+        # ── BARREL (body) — tall narrow ellipse, foreshortened ───────────────
+        barrel_w = 45
+        barrel_h = body_bot - body_top
+        pygame.draw.ellipse(surf, horse_c,
+                            (barrel_cx - barrel_w // 2, body_top,
+                             barrel_w, barrel_h))
+        # Chest highlight — lighter oval on the front face
         pygame.draw.ellipse(surf, horse_hi,
-                            (px - body_w // 4, body_y + 6, body_w // 2, body_h // 3))
-        # Belly lower curve
-        pygame.draw.ellipse(surf, (48, 30, 12),
-                            (px - body_w // 2 + 4, body_y + body_h - 14,
-                             body_w - 8, 18))
+                            (barrel_cx - barrel_w // 4, body_top + 10,
+                             barrel_w // 2, barrel_h // 3))
 
-        # ── FRONT LEGS (slightly in front of body, front-on) ─────────────────
-        for side, sign in ((-1, -1), (1, 1)):
-            kick = int(math.sin(gait + math.pi * 0.5 + (0 if side == -1 else math.pi)) * 10)
-            lx   = px + sign * 18
-            knee_x = lx + sign * 4
-            knee_y = base_y - 20
-            pygame.draw.line(surf, leg_col, (lx, body_y + body_h), (knee_x, knee_y), 9)
-            foot_x = lx + sign * 8 + kick
-            pygame.draw.line(surf, leg_col, (knee_x, knee_y), (foot_x, base_y - 4), 7)
-            pygame.draw.ellipse(surf, hoof_col, (foot_x - 9, base_y - 8, 18, 9))
+        # ── NECK — rises from centre-top of barrel ────────────────────────────
+        neck_bot_x = barrel_cx
+        neck_bot_y = body_top + 8
+        neck_top_x = barrel_cx + 2      # very slight forward lean
+        neck_top_y = body_top - 38
+        neck_w = 20
+        # Draw as a quad (trapezoid widening at base)
+        pygame.draw.polygon(surf, horse_c, [
+            (neck_bot_x - neck_w // 2,     neck_bot_y),
+            (neck_bot_x + neck_w // 2,     neck_bot_y),
+            (neck_top_x + neck_w // 2 - 4, neck_top_y),
+            (neck_top_x - neck_w // 2 + 4, neck_top_y),
+        ])
+        # Neck highlight
+        pygame.draw.polygon(surf, horse_hi, [
+            (neck_bot_x - 4, neck_bot_y),
+            (neck_bot_x + 4, neck_bot_y),
+            (neck_top_x + 2, neck_top_y),
+            (neck_top_x - 2, neck_top_y),
+        ])
 
-        # ── NECK (shorter, pointing upward from centre of chest) ─────────────
-        neck_w = 28
-        neck_h = 38
-        neck_y = body_y - neck_h + 8
-        pygame.draw.ellipse(surf, horse_col, (px - neck_w // 2, neck_y, neck_w, neck_h + 10))
-        pygame.draw.ellipse(surf, horse_hi,
-                            (px - neck_w // 4, neck_y + 4, neck_w // 2, neck_h // 3))
-
-        # ── HEAD (front-on: roughly round with wide nostrils) ─────────────────
-        head_y = neck_y - 32
-        head_w = 38
-        head_h = 46
-        pygame.draw.ellipse(surf, horse_col, (px - head_w // 2, head_y, head_w, head_h))
-        # Blaze (white stripe down centre of face)
-        pygame.draw.ellipse(surf, (220, 215, 200),
-                            (px - 5, head_y + 6, 10, head_h - 14))
-        # Eyes (front-on: both visible, one each side)
-        for ex in (-14, 14):
-            pygame.draw.circle(surf, (20, 12, 4),  (px + ex, head_y + 14), 5)
-            pygame.draw.circle(surf, (255, 240, 180), (px + ex + 1, head_y + 13), 2)
-        # Nostrils (large, front-on)
-        for nx in (-9, 9):
-            pygame.draw.ellipse(surf, (38, 18, 6),
-                                (px + nx - 5, head_y + head_h - 16, 10, 7))
-        # Bridle across nose
-        pygame.draw.line(surf, (160, 120, 50),
-                         (px - head_w // 2 + 2, head_y + head_h - 18),
-                         (px + head_w // 2 - 2, head_y + head_h - 18), 3)
-        # Crown piece / browband
-        pygame.draw.line(surf, (160, 120, 50),
-                         (px - head_w // 2 + 4, head_y + 10),
-                         (px + head_w // 2 - 4, head_y + 10), 2)
-        # Ears (two small triangles)
-        for ex, ep in ((-10, -1), (10, 1)):
-            pygame.draw.polygon(surf, horse_col, [
-                (px + ex - 4, head_y + 4),
-                (px + ex + 4, head_y + 4),
-                (px + ex + ep, head_y - 10),
+        # ── HEAD — front-on: wide jaw, long nose, big eyes ────────────────────
+        head_cx = neck_top_x
+        head_jaw_y = neck_top_y          # jaw attaches at neck top
+        head_h  = 52
+        head_w  = 30                     # slimmer than before
+        # Skull / forehead (upper, rounder)
+        skull_y = head_jaw_y - head_h
+        pygame.draw.ellipse(surf, horse_c,
+                            (head_cx - head_w // 2, skull_y,
+                             head_w, head_h))
+        # Jaw flares slightly wider
+        jaw_w = head_w + 6
+        pygame.draw.ellipse(surf, horse_c,
+                            (head_cx - jaw_w // 2, head_jaw_y - 22,
+                             jaw_w, 26))
+        # Blaze (narrow white stripe, front-on)
+        pygame.draw.ellipse(surf, (225, 218, 205),
+                            (head_cx - 4, skull_y + 8, 8, head_h - 18))
+        # Eyes: set wide on sides of skull, large and dark
+        for ex in (-11, 11):
+            ey = skull_y + 14
+            pygame.draw.ellipse(surf, (18, 10, 2),  (head_cx + ex - 5, ey - 4, 10, 8))
+            pygame.draw.circle(surf, (240, 220, 160), (head_cx + ex + 1, ey - 1), 2)
+        # Nostrils — large, oval, front-on
+        for nx in (-7, 7):
+            pygame.draw.ellipse(surf, (40, 20, 6),
+                                (head_cx + nx - 5, head_jaw_y - 14, 10, 7))
+        # Muzzle band (bridle)
+        pygame.draw.line(surf, (155, 115, 45),
+                         (head_cx - jaw_w // 2 + 2, head_jaw_y - 16),
+                         (head_cx + jaw_w // 2 - 2, head_jaw_y - 16), 2)
+        # Brow band
+        pygame.draw.line(surf, (155, 115, 45),
+                         (head_cx - head_w // 2 + 2, skull_y + 12),
+                         (head_cx + head_w // 2 - 2, skull_y + 12), 2)
+        # Ears — narrow triangles
+        for ex, lean in ((-8, -2), (8, 2)):
+            pygame.draw.polygon(surf, horse_c, [
+                (head_cx + ex - 4, skull_y + 5),
+                (head_cx + ex + 4, skull_y + 5),
+                (head_cx + ex + lean, skull_y - 12),
             ])
-        # Mane (hair tuft between ears, flutter)
-        mane_wave = int(math.sin(t * 0.4) * 3)
+            pygame.draw.polygon(surf, (200, 160, 120), [
+                (head_cx + ex - 2, skull_y + 5),
+                (head_cx + ex + 2, skull_y + 5),
+                (head_cx + ex + lean, skull_y - 8),
+            ])
+        # Forelock / mane tuft between ears
+        mane_wave = int(math.sin(t * 0.38) * 3)
         for mi in range(5):
-            mx2 = px - 6 + mi * 3
-            pygame.draw.line(surf, (25, 14, 4),
-                             (mx2, head_y + 2),
-                             (mx2 + mane_wave, head_y - 8 - mi * 2), 2)
+            mxp = head_cx - 4 + mi * 2
+            pygame.draw.line(surf, (28, 14, 4),
+                             (mxp, skull_y + 4),
+                             (mxp + mane_wave, skull_y - 6 - mi * 2), 2)
 
-        # ── JOCKEY (sits above the horse, leans forward over neck) ───────────
+        # ── JOCKEY ────────────────────────────────────────────────────────────
+        jock_seat_y = body_top - 2        # sits right on the withers
+        arm_bob     = int(math.sin(t * 0.52) * 3)
+
         if self.is_ducking:
-            # Tucked right down — just a helmet poking above the neck
-            helm_y = neck_y - 14
-            pygame.draw.ellipse(surf, (180, 40, 40), (px - 14, helm_y - 10, 28, 18))
-            pygame.draw.rect(surf, (150, 28, 28), (px - 16, helm_y + 6, 32, 5), border_radius=2)
+            # Tucked flat — helmet visible just above neck
+            helm_cx = head_cx
+            helm_y  = neck_top_y - 16
+            pygame.draw.ellipse(surf, (175, 35, 35),
+                                (helm_cx - 13, helm_y - 8, 26, 16))
+            pygame.draw.rect(surf,  (145, 24, 24),
+                             (helm_cx - 15, helm_y + 6, 30, 4), border_radius=2)
         else:
-            jock_y = neck_y - 4   # jockey seat level (just above horse shoulders)
+            # Seat straddling withers
+            pygame.draw.ellipse(surf, (40, 58, 78),
+                                (barrel_cx - 16, jock_seat_y - 8, 32, 14))
 
-            # Seat / lower body astride the horse
-            pygame.draw.ellipse(surf, (44, 62, 80), (px - 20, jock_y - 10, 40, 16))
+            # Torso — leans forward, front-on so appears narrow
+            tor_bot = (barrel_cx, jock_seat_y - 4)
+            tor_top = (barrel_cx + 1, jock_seat_y - 30 + arm_bob)
+            pygame.draw.line(surf, (40, 58, 78), tor_bot, tor_top, 13)
+            # Silk stripes (horizontal)
+            for si, sc in enumerate([(215, 45, 45), (235, 235, 50), (215, 45, 45)]):
+                sy = tor_bot[1] - 5 - si * 7
+                pygame.draw.line(surf, sc,
+                                 (tor_top[0] - 7, sy), (tor_top[0] + 7, sy), 4)
 
-            # Torso — angled forward over neck
-            arm_bob = int(math.sin(t * 0.55) * 3)
-            tor_x   = px
-            tor_bot = jock_y - 4
-            tor_top = jock_y - 32 + arm_bob
-            # Draw torso as a thick line (front-on, so it's narrow)
-            pygame.draw.line(surf, (44, 62, 80), (tor_x, tor_bot), (tor_x, tor_top), 16)
-            # Silk stripes across torso (horizontal bands)
-            for si, sc_col in enumerate([(220, 50, 50), (240, 240, 60), (220, 50, 50)]):
-                sy = tor_bot - 6 - si * 8
-                pygame.draw.line(surf, sc_col, (tor_x - 8, sy), (tor_x + 8, sy), 4)
+            # Arms reaching forward
+            ay = tor_top[1] + 6 + arm_bob
+            for sign in (-1, 1):
+                ax = barrel_cx + sign * 20
+                pygame.draw.line(surf, (40, 58, 78),
+                                 tor_top, (ax, ay + 4), 5)
+                # Rein lines to bridle
+                pygame.draw.line(surf, (150, 112, 42),
+                                 (ax, ay + 4),
+                                 (head_cx + sign * 8, head_jaw_y - 14), 2)
 
-            # Arms out each side gripping reins
-            arm_y  = tor_top + 8 + arm_bob
-            for side, sign in ((-1, -1), (1, 1)):
-                ax = tor_x + sign * 24
-                pygame.draw.line(surf, (44, 62, 80), (tor_x, arm_y), (ax, arm_y + 6), 6)
-                # Reins dropping forward from hands
-                pygame.draw.line(surf, (160, 120, 50),
-                                 (ax, arm_y + 6), (ax + sign * 4, head_y + head_h - 16), 2)
+            # Head — small circle, front-on
+            hr  = 10
+            hcx = barrel_cx
+            hcy = tor_top[1] - hr
+            pygame.draw.circle(surf, (208, 162, 116), (hcx, hcy), hr)
+            # Helmet dome
+            pygame.draw.ellipse(surf, (175, 35, 35),
+                                (hcx - hr - 1, hcy - hr, hr * 2 + 2, hr + 3))
+            pygame.draw.rect(surf,  (145, 24, 24),
+                             (hcx - hr - 3, hcy + 2, hr * 2 + 6, 4),
+                             border_radius=2)
+            # Goggles
+            pygame.draw.ellipse(surf, (55, 125, 195), (hcx - 10, hcy - 3, 8, 6))
+            pygame.draw.ellipse(surf, (55, 125, 195), (hcx + 2,  hcy - 3, 8, 6))
 
-            # Head (front-on: small oval above torso)
-            head_r = 11
-            hx, hy = tor_x, tor_top - head_r + 2
-            pygame.draw.circle(surf, (210, 165, 120), (hx, hy), head_r)
-            # Helmet
-            pygame.draw.ellipse(surf, (180, 40, 40),
-                                (hx - head_r - 1, hy - head_r - 1, head_r * 2 + 2, head_r + 4))
-            pygame.draw.rect(surf, (150, 28, 28),
-                             (hx - head_r - 3, hy + 2, head_r * 2 + 6, 4), border_radius=2)
-            # Goggles (two circles side by side, front-on)
-            pygame.draw.ellipse(surf, (60, 130, 200), (hx - 11, hy - 4, 9, 6))
-            pygame.draw.ellipse(surf, (60, 130, 200), (hx + 2,  hy - 4, 9, 6))
-
-        # ── Lane indicators ──────────────────────────────────────────────────
+        # ── LANE INDICATOR DOTS ───────────────────────────────────────────────
         for i in range(3):
             dot_x  = int(lane_to_x(i, 0.0))
             active = (i == self.player_lane)
             pygame.draw.circle(surf, (0, 0, 0),   (dot_x, H - 13), 7)
-            pygame.draw.circle(surf, C_WHITE if active else C_DARK_GOLD, (dot_x, H - 13), 5)
+            pygame.draw.circle(surf, C_WHITE if active else C_DARK_GOLD,
+                               (dot_x, H - 13), 5)
             if active:
                 pygame.draw.circle(surf, (255, 255, 255), (dot_x, H - 13), 3)
 
